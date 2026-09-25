@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Signal Log — AI & AWS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <strong>Signal Log</strong>
+    <span id="status" class="status-line" aria-live="polite">Connecting…</span>
+  </div>
+
+  <div class="mast" role="group" aria-label="Choose which news streams to show">
+    <button class="stream" data-s="ai" aria-pressed="true" title="Show or hide AI news">AI</button>
+    <span class="amp" aria-hidden="true">&amp;</span>
+    <button class="stream" data-s="aws" aria-pressed="true" title="Show or hide AWS news">AWS</button>
+    <p class="mast-note">Headlines and AI-written summaries of what moved in models, agents and the cloud. <b id="count"></b> Tap a word to focus on one stream.</p>
+  </div>
+
+  <div class="bar">
+    <div class="search">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="q" type="search" placeholder="Search headlines, companies, services…" aria-label="Search stories">
+    </div>
+    <button class="btn" id="refreshBtn">Check for news now</button>
+  </div>
+
+  <button class="new-pill hidden" id="newPill">Show new stories</button>
+
+  <main id="feed" aria-live="polite"><p class="empty">Loading stories…</p></main>
+
+  <footer>Summaries are AI-generated from the original articles. Follow each link for the full reporting.</footer>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
