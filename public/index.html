@@ -53,6 +53,15 @@
 
   <button class="new-pill hidden" id="newPill">Show new stories</button>
 
+  <!-- On-load refresh progress -->
+  <div class="loader hidden" id="loader" role="status" aria-live="polite">
+    <div class="loader-inner">
+      <div class="loader-label" id="loaderLabel">Checking sources for the latest news…</div>
+      <div class="progress"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="loader-sub" id="loaderSub"></div>
+    </div>
+  </div>
+
   <main id="feed" class="wrap" aria-live="polite"><p class="empty">Loading stories…</p></main>
 
   <footer class="site-footer">

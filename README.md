@@ -15,18 +15,26 @@ npm start                   # open http://localhost:3000
 See [`.env.example`](.env.example) for every setting and what it does. At minimum, set
 `ANTHROPIC_API_KEY`; set `ADMIN_TOKEN` too if you plan to host this publicly.
 
-On first start the server fetches all feeds and summarizes new articles (this takes a minute or two). After that it checks again every `REFRESH_MINUTES`.
+**Refreshes happen on demand, not on a timer.** When someone opens the site and the stored
+news is older than `REFRESH_MINUTES` (default 30), the page triggers a refresh and shows a
+progress bar while the server fetches feeds and summarizes new articles. If the news is still
+fresh, the page loads instantly from cache and does nothing. This means the app can run on a
+free host that sleeps when idle — a visit wakes it and pulls the latest news.
 
 Without an API key the site still works, but shows the original titles and a short preview instead of AI summaries.
 
 ## How it works
 
 ```
- RSS feeds ──► fetcher.js ──► skip already-stored URLs ──► get article text
-                                                                │
- browser ◄── server.js /api ◄── data/stories.json ◄── summarizer.js (Claude)
-   │  polls /api/status every 60 s
-   └─ loads new stories automatically (or shows a "Show new stories" button if you're scrolled down)
+ visitor opens site ──► browser checks /api/status
+   │                        │
+   │           news fresh? ─┴─ news stale (>REFRESH_MINUTES)?
+   │              │                      │
+   │        show cached          POST /api/refresh ──► fetcher.js ──► summarizer.js (Claude)
+   │        stories now                  │                                    │
+   └────────────────────────────────────┴──► progress bar polls /api/status ──┘
+                                              (done/total) until finished, then
+                                              loads the new data/stories.json
 ```
 
 | File | What it does |
@@ -36,27 +44,34 @@ Without an API key the site still works, but shows the original titles and a sho
 | `src/summarizer.js` | The Claude prompt that writes headlines and summaries, and tags each story AI and/or AWS. |
 | `src/refresh.js` | One refresh cycle: fetch, dedupe, summarize, save. |
 | `src/store.js` | Saves stories to `data/stories.json`. Removes duplicates and drops old stories. |
-| `src/server.js` | Express server, API routes and the auto-refresh timer. |
+| `src/server.js` | Express server and API routes. No background timer — refreshes are triggered on demand by the browser. |
 | `public/` | The website (HTML, CSS, JS). No build step. |
 
 ## API
 
 - `GET /api/stories?stream=ai|aws&q=bedrock&limit=50`: the stored stories, newest first
-- `GET /api/status`: when the stories were last updated, and whether a refresh is running now
-- `POST /api/refresh`: start a refresh right away. Limited to once every 2 minutes; needs the `x-admin-token` header if `ADMIN_TOKEN` is set.
+- `GET /api/status`: when the stories were last updated, whether the news is `stale`, whether a refresh is `refreshing` now, and live `progress` (`{done, total, phase}`) that drives the progress bar.
+- `POST /api/refresh`: start a refresh right away. Triggered automatically by the browser when the news is stale, or manually by the Refresh button. Limited to once every 2 minutes; needs the `x-admin-token` header if `ADMIN_TOKEN` is set.
 
 ## Customizing
 
 - **Add a source:** add `{ name, url, stream, maxItems }` to `FEEDS` in `src/config.js`. For busy feeds, add `keywords: [...]` so only matching items are kept.
 - **Change the summary style:** edit `PROMPT` in `src/summarizer.js`.
 - **Control API cost:** each new article is one Claude call. `MAX_NEW_PER_RUN` caps how many are summarized per refresh. Already-stored articles are never summarized again.
-- **Refresh from cron instead:** run `npm run refresh` to do one cycle and exit.
+- **Refresh from cron / manually:** run `npm run refresh` to do one cycle and exit (handy for a scheduled job, or to pre-fill the cache before deploying).
+- **Change the staleness window:** set `REFRESH_MINUTES`. Smaller = fresher news but more on-load refreshes (and API calls); larger = faster loads, older news.
 
 ## Deploying
 
-This is a long-running Node server (Express + a background refresh timer that writes
-to disk), so it needs a host that runs a persistent process. It will **not** work on
-static-only hosts like GitHub Pages, Netlify, or Vercel's static output.
+This is a Node server (Express) that fetches and summarizes news on demand. It needs a
+host that runs Node, but it does **not** need to stay awake — there's no background timer,
+so a free host that sleeps when idle is fine. A visitor's request wakes it, it serves cached
+news instantly, and refreshes only if the news is stale. It will **not** work on static-only
+hosts like GitHub Pages (no server to run the fetch + your API key must stay server-side).
+
+Because it tolerates sleeping, the easiest free options are **Render's free web service**
+or **Google Cloud Run** (both sleep when idle and wake on a request). For always-on free,
+an **Oracle Cloud Free Tier** VM works too (see Option 3).
 
 ### Before you deploy (applies to every option)
 
