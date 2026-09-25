@@ -4,13 +4,17 @@ import { fetchAllFeeds, getArticleText } from "./fetcher.js";
 import { summarize } from "./summarizer.js";
 import { knownKeys, addStories, urlKey } from "./store.js";
 
-export const status = { running: false, lastRunAt: null, lastRunAdded: 0, lastError: null, nextRunAt: null };
+export const status = {
+  running: false, lastRunAt: null, lastRunAdded: 0, lastError: null,
+  progress: { done: 0, total: 0, phase: "idle" }, // phase: idle | fetching | summarizing | saving | done
+};
 
 /** One full cycle: read feeds → skip known articles → summarize new ones → save. */
 export async function runRefresh() {
   if (status.running) return { skipped: true };
   status.running = true;
   status.lastError = null;
+  status.progress = { done: 0, total: 0, phase: "fetching" };
   const started = Date.now();
   try {
     const known = await knownKeys();
@@ -23,6 +27,7 @@ export async function runRefresh() {
       .slice(0, SETTINGS.maxNewPerRun);
 
     console.log(`[refresh] ${fresh.length} new article(s) to summarize`);
+    status.progress = { done: 0, total: fresh.length, phase: fresh.length ? "summarizing" : "saving" };
     const stories = [];
     // Small worker pool: 3 articles at a time
     const queue = [...fresh];
@@ -49,10 +54,13 @@ export async function runRefresh() {
           console.log(`[refresh] + ${s.headline}`);
         } catch (e) {
           console.warn(`[refresh] failed on ${item.url}: ${e.message}`);
+        } finally {
+          status.progress.done++; // count every processed article so the bar completes
         }
       }
     }));
 
+    status.progress.phase = "saving";
     const total = await addStories(stories, SETTINGS);
     status.lastRunAdded = stories.length;
     console.log(`[refresh] done in ${((Date.now() - started) / 1000).toFixed(1)}s — added ${stories.length}, total ${total}`);
@@ -64,6 +72,7 @@ export async function runRefresh() {
   } finally {
     status.running = false;
     status.lastRunAt = new Date().toISOString();
+    status.progress.phase = "done";
   }
 }
 

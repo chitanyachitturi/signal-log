@@ -20,16 +20,19 @@ app.get("/api/stories", async (req, res) => {
   res.json({ updatedAt: db.updatedAt, count: list.length, stories: list.slice(0, limit) });
 });
 
-// Lightweight endpoint the browser polls to know when new stories exist
+// Lightweight endpoint the browser polls: staleness + live refresh progress.
 app.get("/api/status", async (_req, res) => {
   const db = await load();
+  const staleMs = SETTINGS.refreshMinutes * 60e3;
+  const stale = !db.updatedAt || Date.now() - new Date(db.updatedAt).getTime() > staleMs;
   res.json({
     updatedAt: db.updatedAt,
     count: db.stories.length,
     refreshing: status.running,
+    stale,
+    progress: { done: status.progress.done, total: status.progress.total, phase: status.progress.phase },
     lastRunAt: status.lastRunAt,
     lastRunAdded: status.lastRunAdded,
-    nextRunAt: status.nextRunAt,
     lastError: status.lastError,
     refreshMinutes: SETTINGS.refreshMinutes,
     aiSummaries: SETTINGS.hasApiKey,
@@ -49,18 +52,10 @@ app.post("/api/refresh", (req, res) => {
   res.status(202).json({ started: true });
 });
 
-// ---- Auto-refresh scheduler ----
-const intervalMs = SETTINGS.refreshMinutes * 60e3;
-function schedule() {
-  status.nextRunAt = new Date(Date.now() + intervalMs).toISOString();
-  setTimeout(async () => { await runRefresh().catch(() => {}); schedule(); }, intervalMs);
-}
-
+// No background scheduler. Refreshes happen on demand: the browser triggers
+// /api/refresh when it loads the site and the stored news is older than
+// SETTINGS.refreshMinutes. This lets the app run on free hosts that sleep.
 app.listen(SETTINGS.port, async () => {
   console.log(`Signal Log running at http://localhost:${SETTINGS.port}`);
-  console.log(`Checking ${FEEDS.length} feeds every ${SETTINGS.refreshMinutes} min · AI summaries: ${SETTINGS.hasApiKey ? SETTINGS.model : "OFF (set ANTHROPIC_API_KEY)"}`);
-  const db = await load();
-  const stale = !db.updatedAt || Date.now() - new Date(db.updatedAt) > intervalMs;
-  if (stale) runRefresh().catch(() => {}); // fill the feed on first start
-  schedule();
+  console.log(`On-demand refresh · stale after ${SETTINGS.refreshMinutes} min · AI summaries: ${SETTINGS.hasApiKey ? SETTINGS.model : "OFF (set ANTHROPIC_API_KEY)"}`);
 });

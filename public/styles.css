@@ -66,6 +66,17 @@ a{color:inherit;text-decoration:none}
 .new-pill{position:sticky;top:64px;z-index:15;display:block;margin:14px auto 0;
   appearance:none;border:0;border-radius:99px;padding:9px 18px;font:inherit;font-weight:700;cursor:pointer;background:var(--ai);color:#fff;box-shadow:0 6px 20px rgba(40,30,120,.25)}
 
+/* ---------- On-load refresh loader ---------- */
+.loader{max-width:1180px;margin:0 auto;padding:26px 22px 0}
+.loader-inner{background:var(--surface);border:1px solid var(--rule);border-radius:14px;padding:20px 22px;box-shadow:var(--shadow)}
+.loader-label{font-weight:700;font-size:1rem;margin-bottom:12px}
+.progress{height:8px;border-radius:99px;background:var(--rule-soft);overflow:hidden}
+.progress-fill{height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,var(--ai),var(--aws));
+  transition:width .4s ease}
+.progress-fill.indeterminate{width:35%;animation:slide 1.1s ease-in-out infinite}
+@keyframes slide{0%{margin-left:-35%}100%{margin-left:100%}}
+.loader-sub{margin-top:10px;color:var(--muted);font-size:.85rem}
+
 /* ---------- Feed ---------- */
 #feed{padding-top:30px;padding-bottom:70px}
 .empty{padding:60px 0;color:var(--muted);font-size:1.05rem;text-align:center}

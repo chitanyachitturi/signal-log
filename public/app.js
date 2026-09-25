@@ -126,15 +126,16 @@ async function loadStories({ markNew = false } = {}) {
 }
 
 let lastStatus = null;
+// Light background check: refresh the status line, and pick up new stories if a
+// refresh finished elsewhere (e.g. another tab). Does NOT trigger new refreshes.
 async function poll() {
+  if (refreshing) return; // the watcher owns polling while a refresh runs
   try {
     const st = await (await fetch("/api/status")).json();
     lastStatus = st;
     paintStatus();
     if (st.updatedAt && st.updatedAt !== state.updatedAt) {
-      // If the reader is scrolled down, don't move the page under them — offer a button instead.
       if (window.scrollY > 400 && state.stories.length) {
-        state.pending = st.updatedAt;
         $("#newPill").classList.remove("hidden");
       } else {
         await loadStories({ markNew: state.stories.length > 0 });
@@ -150,13 +151,93 @@ function paintStatus() {
   const st = lastStatus; if (!st) return;
   const el = $("#status");
   el.className = "status-line" + (st.refreshing ? " busy" : "") + (st.lastError ? " err" : "");
-  const next = st.nextRunAt ? new Date(st.nextRunAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "soon";
   el.innerHTML = st.refreshing
-    ? `<span class="dot"></span>Checking ${st.feeds} sources for new stories…`
+    ? `<span class="dot"></span>Fetching the latest news…`
     : st.lastError
       ? `Last check failed: ${esc(st.lastError)}`
-      : `<span class="dot"></span>Updated ${ago(st.updatedAt)} · next check ${next}`;
+      : `<span class="dot"></span>Updated ${ago(st.updatedAt)}`;
   $("#refreshBtn").disabled = st.refreshing;
+}
+
+// ---------- Progress loader ----------
+const PHASE_LABEL = {
+  fetching: "Checking sources for the latest news…",
+  summarizing: "Summarizing new articles with AI…",
+  saving: "Almost done — saving stories…",
+  done: "Up to date.",
+  idle: "Checking sources for the latest news…",
+};
+
+function showLoader() {
+  $("#loader").classList.remove("hidden");
+  $("#refreshBtn").disabled = true;
+}
+function hideLoader() {
+  $("#loader").classList.add("hidden");
+  $("#progressFill").classList.remove("indeterminate");
+  $("#progressFill").style.width = "0%";
+}
+function paintLoader(st) {
+  const fill = $("#progressFill");
+  const p = st.progress || { done: 0, total: 0, phase: "fetching" };
+  $("#loaderLabel").textContent = PHASE_LABEL[p.phase] || PHASE_LABEL.fetching;
+  if (p.total > 0) {
+    fill.classList.remove("indeterminate");
+    fill.style.width = Math.round((p.done / p.total) * 100) + "%";
+    $("#loaderSub").textContent = `${p.done} of ${p.total} articles`;
+  } else {
+    // No count yet (still fetching feeds): show an indeterminate sweep.
+    fill.classList.add("indeterminate");
+    $("#loaderSub").textContent = "";
+  }
+}
+
+// Trigger a refresh and watch it to completion, driving the progress bar.
+let refreshing = false;
+async function triggerRefresh({ manual = false } = {}) {
+  if (refreshing) return;
+  const headers = {};
+  const token = sessionStorage.getItem("adminToken");
+  if (token) headers["x-admin-token"] = token;
+
+  const res = await fetch("/api/refresh", { method: "POST", headers });
+  if (res.status === 401) {
+    if (manual) {
+      const t = prompt("Enter your admin token to refresh:");
+      if (t) { sessionStorage.setItem("adminToken", t); return triggerRefresh({ manual }); }
+    }
+    return; // no token on an automatic load: just show cached stories
+  }
+  // 200/202 = started (or already running); 429 = refreshed very recently. Either way, watch progress.
+  refreshing = true;
+  showLoader();
+  await watchRefresh();
+}
+
+// Poll status until the refresh finishes, then load the fresh stories.
+async function watchRefresh() {
+  try {
+    while (true) {
+      const st = await (await fetch("/api/status")).json();
+      lastStatus = st;
+      paintStatus();
+      paintLoader(st);
+      if (!st.refreshing) break;
+      await new Promise(r => setTimeout(r, 1200));
+    }
+    // Fill to 100% briefly, then swap in the results.
+    $("#progressFill").classList.remove("indeterminate");
+    $("#progressFill").style.width = "100%";
+    await new Promise(r => setTimeout(r, 350));
+    await loadStories({ markNew: state.stories.length > 0 });
+  } catch {
+    $("#status").className = "status-line err";
+    $("#status").textContent = "Can't reach the server. Retrying…";
+  } finally {
+    refreshing = false;
+    hideLoader();
+    paintStatus();
+  }
 }
 
 $("#newPill").addEventListener("click", async () => {
@@ -165,21 +246,7 @@ $("#newPill").addEventListener("click", async () => {
   window.scrollTo({ top: $("#feed").offsetTop - 20, behavior: "smooth" });
 });
 
-$("#refreshBtn").addEventListener("click", async () => {
-  const headers = {};
-  const token = sessionStorage.getItem("adminToken");
-  if (token) headers["x-admin-token"] = token;
-  const res = await fetch("/api/refresh", { method: "POST", headers });
-  if (res.status === 401) {
-    const t = prompt("Enter your admin token to refresh:");
-    if (t) { sessionStorage.setItem("adminToken", t); $("#refreshBtn").click(); }
-    return;
-  }
-  if (res.status === 429) { alert("The feed was refreshed less than 2 minutes ago. Try again shortly."); return; }
-  setTimeout(poll, 1500);
-  // Poll faster while a refresh runs
-  const fast = setInterval(async () => { await poll(); if (!lastStatus?.refreshing) clearInterval(fast); }, 5000);
-});
+$("#refreshBtn").addEventListener("click", () => triggerRefresh({ manual: true }));
 
 // ---------- Filters ----------
 function setCategory(c) {
@@ -199,7 +266,24 @@ let qT; $("#q").addEventListener("input", e => { clearTimeout(qT); qT = setTimeo
 // ---------- Start ----------
 $("#dateline").textContent = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 $("#year").textContent = new Date().getFullYear();
-loadStories().catch(() => {}).finally(poll);
-setInterval(poll, POLL_MS);
-setInterval(paintStatus, 30_000); // keep "updated X min ago" current
+
+async function boot() {
+  // Show whatever we have cached right away.
+  await loadStories().catch(() => {});
+  // Then ask the server whether the news is stale; if so, refresh on this visit.
+  try {
+    const st = await (await fetch("/api/status")).json();
+    lastStatus = st;
+    paintStatus();
+    if (st.stale) {
+      await triggerRefresh();          // on-load refresh (only when older than the staleness window)
+    }
+  } catch {
+    // Server unreachable: leave cached stories on screen; the poller will retry.
+  }
+}
+boot();
+
+setInterval(poll, POLL_MS);            // light background sync (no new refreshes)
+setInterval(paintStatus, 30_000);      // keep "updated X min ago" current
 document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
