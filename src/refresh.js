@@ -43,6 +43,7 @@ export async function runRefresh() {
             headline: s.headline,
             summary: s.summary,
             streams: s.streams,
+            image: item.image || null,
             aiGenerated: s.aiGenerated,
           });
           console.log(`[refresh] + ${s.headline}`);

@@ -2,7 +2,8 @@
 const POLL_MS = 60_000; // how often the browser checks for new stories
 
 const $ = s => document.querySelector(s);
-const state = { on: { ai: true, aws: true }, q: "", stories: [], updatedAt: null, freshIds: new Set(), pending: null };
+// category: "all" | "ai" | "aws"
+const state = { category: "all", q: "", stories: [], updatedAt: null, freshIds: new Set(), pending: null };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const safeUrl = u => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : null; } catch { return null; } };
@@ -19,45 +20,94 @@ function ago(iso) {
 function visible() {
   const q = state.q.trim().toLowerCase();
   return state.stories.filter(s =>
-    s.streams.some(x => state.on[x]) &&
+    (state.category === "all" || s.streams.includes(state.category)) &&
     (!q || `${s.headline} ${s.summary} ${s.source}`.toLowerCase().includes(q)));
+}
+
+const timeOf = iso => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+const streamClass = s => (s.streams.length > 1 ? "both" : s.streams[0]);
+const tagsHTML = s => s.streams.map(x => `<span class="tag ${x}">${x === "ai" ? "AI" : "AWS"}</span>`).join("");
+const freshHTML = s => state.freshIds.has(s.id) ? `<span class="fresh-flag">New</span>` : "";
+const readHTML = s => { const u = safeUrl(s.url); return u ? `<a class="read" href="${esc(u)}" target="_blank" rel="noopener noreferrer">Read on ${esc(s.source)} <span aria-hidden="true">↗</span></a>` : ""; };
+
+// Image, or a colored placeholder when the article had none.
+function imageHTML(s, kind) {
+  const cls = streamClass(s);
+  const img = safeUrl(s.image);
+  const inner = img
+    ? `<img src="${esc(img)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.media').classList.add('noimg')">`
+    : "";
+  const label = s.streams.map(x => x === "ai" ? "AI" : "AWS").join(" · ");
+  return `<div class="media ${cls}${img ? "" : " noimg"} media-${kind}">${inner}<span class="media-fallback" aria-hidden="true">${esc(label)}</span></div>`;
 }
 
 function render() {
   const list = visible();
-  $("#count").textContent = `${list.length} of ${state.stories.length} stories showing.`;
   const feed = $("#feed");
+  $("#count").textContent = state.stories.length
+    ? `Showing ${list.length} of ${state.stories.length} stories`
+    : "";
+
   if (!state.stories.length) { feed.innerHTML = `<p class="empty">No stories yet. The server is gathering the first batch — this page updates on its own.</p>`; return; }
   if (!list.length) {
-    feed.innerHTML = `<p class="empty">${state.on.ai || state.on.aws ? "No stories match that search. Try a company or service name, like Bedrock or Gemini." : "Both streams are switched off. Tap AI or AWS above to bring stories back."}</p>`;
+    feed.innerHTML = `<p class="empty">No stories match this filter. Try “All”, or search a company or service name like Bedrock or Gemini.</p>`;
     return;
   }
+
+  // Group by local day, newest first.
   const groups = new Map();
   for (const s of list) {
     const key = new Date(s.publishedAt).toLocaleDateString("en-CA"); // local YYYY-MM-DD
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(s);
   }
+
+  let first = true;
   feed.innerHTML = [...groups].map(([key, items]) => {
     const d = new Date(key + "T12:00:00");
-    return `<section class="day">
-      <div class="day-label"><div class="dow">${d.toLocaleDateString("en-US", { weekday: "long" })}</div>
-      <div class="dm">${d.toLocaleDateString("en-US", { month: "long", day: "numeric" })}</div></div>
-      <div>${items.map(storyHTML).join("")}</div></section>`;
+    const label = d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+    let html = `<section class="section"><div class="section-head"><h2>${esc(label)}</h2></div>`;
+    if (first) {
+      // Newest day: every story shown large, landscape-style.
+      html += `<div class="leads">${items.map(heroHTML).join("")}</div>`;
+      first = false;
+    } else {
+      // Older days: compact card grid.
+      html += `<div class="grid">${items.map(cardHTML).join("")}</div>`;
+    }
+    return html + `</section>`;
   }).join("");
 }
 
-function storyHTML(s) {
-  const cls = s.streams.length > 1 ? "both" : s.streams[0];
-  const url = safeUrl(s.url);
-  const fresh = state.freshIds.has(s.id) ? " fresh" : "";
-  return `<article class="story ${cls}${fresh}">
-    <div class="meta">${s.streams.map(x => `<span class="tag ${x}">${x === "ai" ? "AI" : "AWS"}</span>`).join("")}
-      <span>${esc(s.source)}</span><span>${esc(new Date(s.publishedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }))}</span></div>
-    <h3>${esc(s.headline)}</h3>
-    <p class="ai-note">${s.aiGenerated ? "AI summary" : "Preview (AI summaries are off)"}</p>
-    <p class="summary">${esc(s.summary)}</p>
-    ${url ? `<a class="read" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Read the full story on ${esc(s.source)} <span aria-hidden="true">↗</span></a>` : ""}
+function heroHTML(s) {
+  const cls = streamClass(s);
+  return `<article class="hero ${cls}">
+    <div class="accent ${cls}"></div>
+    <div class="hero-grid">
+      <div class="hero-body">
+        <div class="kicker">${tagsHTML(s)}<span class="source">${esc(s.source)}</span><span class="dot-sep">${esc(timeOf(s.publishedAt))}</span>${freshHTML(s)}</div>
+        <h3>${esc(s.headline)}</h3>
+        <p class="ai-note">${s.aiGenerated ? "AI summary" : "Preview (AI summaries are off)"}</p>
+        <p class="summary">${esc(s.summary)}</p>
+        ${readHTML(s)}
+      </div>
+      ${imageHTML(s, "hero")}
+    </div>
+  </article>`;
+}
+
+function cardHTML(s) {
+  const cls = streamClass(s);
+  return `<article class="card ${cls}">
+    <div class="accent ${cls}"></div>
+    ${imageHTML(s, "card")}
+    <div class="card-body">
+      <div class="meta">${tagsHTML(s)}<span class="source">${esc(s.source)}</span><span class="dot-sep">${esc(timeOf(s.publishedAt))}</span>${freshHTML(s)}</div>
+      <h3>${esc(s.headline)}</h3>
+      <p class="ai-note">${s.aiGenerated ? "AI summary" : "Preview"}</p>
+      <p class="summary">${esc(s.summary)}</p>
+      ${readHTML(s)}
+    </div>
   </article>`;
 }
 
@@ -132,17 +182,23 @@ $("#refreshBtn").addEventListener("click", async () => {
 });
 
 // ---------- Filters ----------
-document.querySelectorAll(".stream").forEach(b => b.addEventListener("click", () => {
-  const s = b.dataset.s, other = s === "ai" ? "aws" : "ai";
-  if (state.on[s] && state.on[other]) state.on[other] = false;       // isolate this stream
-  else if (state.on[s] && !state.on[other]) state.on[other] = true;  // back to both
-  else state.on[s] = true;
-  document.querySelectorAll(".stream").forEach(x => x.setAttribute("aria-pressed", String(state.on[x.dataset.s])));
+function setCategory(c) {
+  state.category = c;
+  document.querySelectorAll(".cat").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.c === c)));
+  const sel = $("#catSelect");
+  if (sel.value !== c) sel.value = c;
   render();
-}));
+}
+
+document.querySelectorAll(".cat").forEach(b =>
+  b.addEventListener("click", () => setCategory(b.dataset.c)));
+$("#catSelect").addEventListener("change", e => setCategory(e.target.value));
+
 let qT; $("#q").addEventListener("input", e => { clearTimeout(qT); qT = setTimeout(() => { state.q = e.target.value; render(); }, 120); });
 
 // ---------- Start ----------
+$("#dateline").textContent = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+$("#year").textContent = new Date().getFullYear();
 loadStories().catch(() => {}).finally(poll);
 setInterval(poll, POLL_MS);
 setInterval(paintStatus, 30_000); // keep "updated X min ago" current
