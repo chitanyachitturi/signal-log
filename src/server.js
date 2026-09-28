@@ -40,10 +40,16 @@ app.get("/api/status", async (_req, res) => {
   });
 });
 
-// "Refresh now" button. Throttled; optionally protected by ADMIN_TOKEN.
+// "Refresh now": triggered automatically on page open, and manually by the button.
+//  - Automatic (no ?manual flag): open to anyone, so a visitor's page-open can
+//    trigger a refresh and show the progress bar. No admin token required.
+//  - Manual (?manual=1, the Refresh button): requires ADMIN_TOKEN (when set) via
+//    the x-admin-token header, so only authorized users can force a refresh.
+// Both paths share the 2-minute throttle below.
 let lastManual = 0;
 app.post("/api/refresh", (req, res) => {
-  if (SETTINGS.adminToken && req.get("x-admin-token") !== SETTINGS.adminToken)
+  const isManual = req.query.manual === "1";
+  if (isManual && SETTINGS.adminToken && req.get("x-admin-token") !== SETTINGS.adminToken)
     return res.status(401).json({ error: "Admin token required" });
   if (status.running) return res.status(202).json({ started: false, message: "Already refreshing" });
   if (Date.now() - lastManual < 2 * 60e3) return res.status(429).json({ error: "Refreshed less than 2 minutes ago" });

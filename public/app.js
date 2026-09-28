@@ -194,23 +194,49 @@ function paintLoader(st) {
 
 // Trigger a refresh and watch it to completion, driving the progress bar.
 let refreshing = false;
+// manual=false: automatic on-open refresh — no admin token needed.
+// manual=true : the Refresh button — requires the admin token.
 async function triggerRefresh({ manual = false } = {}) {
   if (refreshing) return;
-  const headers = {};
-  const token = sessionStorage.getItem("adminToken");
-  if (token) headers["x-admin-token"] = token;
 
-  const res = await fetch("/api/refresh", { method: "POST", headers });
-  if (res.status === 401) {
-    if (manual) {
-      const t = prompt("Enter your admin token to refresh:");
-      if (t) { sessionStorage.setItem("adminToken", t); return triggerRefresh({ manual }); }
-    }
-    return; // no token on an automatic load: just show cached stories
+  const headers = {};
+  if (manual) {
+    // The button is token-gated. Send the stored token (prompt for it on 401).
+    const token = sessionStorage.getItem("adminToken");
+    if (token) headers["x-admin-token"] = token;
   }
-  // 200/202 = started (or already running); 429 = refreshed very recently. Either way, watch progress.
+  // Manual requests are flagged so the server knows to enforce the token;
+  // automatic on-open requests are not flagged and skip the check.
+  const url = manual ? "/api/refresh?manual=1" : "/api/refresh";
+
+  // Show the progress bar immediately, before the network round-trip, so it
+  // appears the instant the page opens (or the button is clicked) rather than
+  // after the server responds. We hide it again if the refresh can't start.
   refreshing = true;
   showLoader();
+
+  let res;
+  try {
+    res = await fetch(url, { method: "POST", headers });
+  } catch {
+    refreshing = false;
+    hideLoader();
+    return;
+  }
+
+  if (res.status === 401) {
+    // Only the manual button can hit this. Prompt for the token and retry.
+    refreshing = false;
+    hideLoader();
+    if (manual) {
+      const t = prompt("Enter your admin token to refresh:");
+      if (t) { sessionStorage.setItem("adminToken", t); return triggerRefresh({ manual: true }); }
+    }
+    return;
+  }
+
+  // 200/202 = started (or already running); 429 = refreshed very recently.
+  // Either way, watch progress to completion.
   await watchRefresh();
 }
 
@@ -268,19 +294,28 @@ $("#dateline").textContent = new Date().toLocaleDateString("en-US", { weekday: "
 $("#year").textContent = new Date().getFullYear();
 
 async function boot() {
-  // Show whatever we have cached right away.
-  await loadStories().catch(() => {});
-  // Then ask the server whether the news is stale; if so, refresh on this visit.
+  // Load cached stories in the background, but DON'T block the staleness check on
+  // it. On a cold/sleeping host that first request can take a minute or more; if
+  // we awaited it, the progress bar wouldn't appear until it finished. Fire it
+  // and move on — we await it at the end so cached stories still render.
+  const storiesLoaded = loadStories().catch(() => {});
+
+  // Ask the server whether the news is stale as soon as possible.
   try {
     const st = await (await fetch("/api/status")).json();
     lastStatus = st;
     paintStatus();
-    if (st.stale) {
-      await triggerRefresh();          // on-load refresh (only when older than the staleness window)
+    // Refresh (and show the progress bar) on open when the news is stale OR when
+    // there are no stories yet — the "first batch" case. Either way the bar shows
+    // as soon as the page opens, without waiting for a Refresh click.
+    if (st.stale || st.count === 0) {
+      await triggerRefresh();          // on-load refresh (shows the progress bar immediately)
     }
   } catch {
     // Server unreachable: leave cached stories on screen; the poller will retry.
   }
+
+  await storiesLoaded;                 // make sure cached stories are rendered too
 }
 boot();
 
