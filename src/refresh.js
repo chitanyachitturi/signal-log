@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { SETTINGS } from "./config.js";
 import { fetchAllFeeds, getArticleText } from "./fetcher.js";
 import { summarize } from "./summarizer.js";
-import { knownKeys, addStories, urlKey } from "./store.js";
+import { knownKeys, addStories, urlKey, titleTokens, titleSimilarity } from "./store.js";
 
 export const status = {
   running: false, lastRunAt: null, lastRunAdded: 0, lastError: null,
@@ -23,17 +23,36 @@ export async function runRefresh() {
     const fresh = (await fetchAllFeeds())
       .filter(it => new Date(it.publishedAt).getTime() >= cutoff)
       .filter(it => { const k = urlKey(it.url); if (known.has(k) || seen.has(k)) return false; seen.add(k); return true; })
-      .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt))
+      .sort((a, b) => new Date(a.publishedAt) - new Date(b.publishedAt)); // oldest first: earliest becomes the group lead
+
+    // Cheap pre-filter: group articles whose titles are similar (same story on
+    // different sites) BEFORE summarizing, so each group costs one Claude call.
+    // The earliest-published item leads; the rest ride along as extra sources.
+    const groups = [];
+    for (const it of fresh) {
+      const tokens = titleTokens(it.title);
+      const g = groups.find(x => titleSimilarity(tokens, x.tokens) >= SETTINGS.dedupeTitleThreshold);
+      if (g) {
+        g.sources.push({ source: it.source, url: it.url });
+        console.log(`[dedupe] "${it.title}" (${it.source}) merged into "${g.lead.title}"`);
+      } else {
+        groups.push({ lead: it, tokens, sources: [{ source: it.source, url: it.url }] });
+      }
+    }
+    // Newest groups first, capped per run.
+    const picked = groups
+      .sort((a, b) => new Date(b.lead.publishedAt) - new Date(a.lead.publishedAt))
       .slice(0, SETTINGS.maxNewPerRun);
 
-    console.log(`[refresh] ${fresh.length} new article(s) to summarize`);
-    status.progress = { done: 0, total: fresh.length, phase: fresh.length ? "summarizing" : "saving" };
+    console.log(`[refresh] ${picked.length} new story group(s) to summarize (from ${fresh.length} article(s))`);
+    status.progress = { done: 0, total: picked.length, phase: picked.length ? "summarizing" : "saving" };
     const stories = [];
-    // Small worker pool: 3 articles at a time
-    const queue = [...fresh];
+    // Small worker pool: 3 groups at a time
+    const queue = [...picked];
     await Promise.all(Array.from({ length: 3 }, async () => {
       while (queue.length) {
-        const item = queue.shift();
+        const group = queue.shift();
+        const item = group.lead;
         try {
           const text = await getArticleText(item);
           const s = await summarize(item, text);
@@ -42,6 +61,7 @@ export async function runRefresh() {
             id: Buffer.from(urlKey(item.url)).toString("base64url").slice(0, 40),
             url: item.url,
             source: item.source,
+            sources: group.sources, // every site that ran this story (for the Read-more links)
             originalTitle: item.title,
             publishedAt: item.publishedAt,
             fetchedAt: new Date().toISOString(),
@@ -51,11 +71,11 @@ export async function runRefresh() {
             image: item.image || null,
             aiGenerated: s.aiGenerated,
           });
-          console.log(`[refresh] + ${s.headline}`);
+          console.log(`[refresh] + ${s.headline}${group.sources.length > 1 ? ` (${group.sources.length} sources)` : ""}`);
         } catch (e) {
           console.warn(`[refresh] failed on ${item.url}: ${e.message}`);
         } finally {
-          status.progress.done++; // count every processed article so the bar completes
+          status.progress.done++; // count every processed group so the bar completes
         }
       }
     }));

@@ -28,7 +28,18 @@ const timeOf = iso => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric
 const streamClass = s => (s.streams.length > 1 ? "both" : s.streams[0]);
 const tagsHTML = s => s.streams.map(x => `<span class="tag ${x}">${x === "ai" ? "AI" : "AWS"}</span>`).join("");
 const freshHTML = s => state.freshIds.has(s.id) ? `<span class="fresh-flag">New</span>` : "";
-const readHTML = s => { const u = safeUrl(s.url); return u ? `<a class="read" href="${esc(u)}" target="_blank" rel="noopener noreferrer">Read on ${esc(s.source)} <span aria-hidden="true">↗</span></a>` : ""; };
+// One "Read on <source>" link per site that ran the story. Falls back to the
+// single url/source for older stories saved before multi-source dedupe existed.
+const readHTML = s => {
+  const list = (Array.isArray(s.sources) && s.sources.length ? s.sources : [{ source: s.source, url: s.url }])
+    .map(src => ({ source: src.source, url: safeUrl(src.url) }))
+    .filter(src => src.url);
+  if (!list.length) return "";
+  const links = list
+    .map(src => `<a class="read" href="${esc(src.url)}" target="_blank" rel="noopener noreferrer">Read on ${esc(src.source)} <span aria-hidden="true">↗</span></a>`)
+    .join("");
+  return `<div class="reads">${links}</div>`;
+};
 
 // Image, or a colored placeholder when the article had none.
 function imageHTML(s, kind) {

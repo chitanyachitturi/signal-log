@@ -29,9 +29,12 @@ export const SETTINGS = {
   model: process.env.CLAUDE_MODEL || "claude-haiku-4-5-20251001",
   hasApiKey: Boolean(process.env.ANTHROPIC_API_KEY),
   refreshMinutes: num(process.env.REFRESH_MINUTES, 30),
-  maxNewPerRun: num(process.env.MAX_NEW_PER_RUN, 25),
+  maxNewPerRun: num(process.env.MAX_NEW_PER_RUN, 35),
   maxAgeDays: num(process.env.MAX_AGE_DAYS, 21),
   maxStored: 600,
+  // Title-similarity threshold (0-1) for treating two articles as the same story
+  // across different sites. Higher = stricter (fewer merges). 0.6 ≈ most words shared.
+  dedupeTitleThreshold: Number(process.env.DEDUPE_TITLE_THRESHOLD) || 0.6,
   adminToken: process.env.ADMIN_TOKEN || "",
   articleCharLimit: 12000, // how much article text is sent to Claude
   fetchTimeoutMs: 15000,
